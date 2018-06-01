@@ -1,0 +1,233 @@
+---
+title: "Project_First_Assignment"
+author: "Aldo Myrtaj"
+date: "November 14, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+#set work directory
+setwd("/media/aldo_myrtaj/DATA/OneDriveNew/OneDrive - rwth-aachen.de/Documents/RWTH/3rd_Semester/ws17/Data Visualisation and Analytics/RStudioDirectory/Project")
+
+#load libraries pacman and google maps
+library(pacman)
+library(ggmap)
+library(data.table)
+library(maps)
+library(leaflet)
+library(jsonlite)
+
+
+p_load(tidyverse, stringr, rvest)
+
+#load data
+TAXI_DATA <- read.table("yellow_tripdata_2016-11.csv", skip = 1, stringsAsFactors = FALSE, sep = ",")
+TAXI_NAMES <- read.table("yellow_tripdata_2016-11.csv", nrow = 1, stringsAsFactors = FALSE, sep = ",")
+TAXI_ZONES <- fread("taxi+_zone_lookup.csv")
+#clean unwanted rows (empty rows)
+TAXI_DATA <- TAXI_DATA[,-c(18:19)]
+names(TAXI_DATA) <- TAXI_NAMES
+
+#clean Zone in TAXI_ZONES
+TAXI_ZONES$Zone <- gsub("\\<\\w+[/]","", TAXI_ZONES$Zone)
+
+#create geo coordinates from google maps latitude and longlitude 
+x <- 1
+TAXI_GEO_COORDINATES <- data.frame(lon=character(), 
+                 lat=character(),
+                 stringsAsFactors=FALSE) 
+for(i in TAXI_ZONES$Zone) {
+  TAXI_GEO_COORDINATES[x,] <- geocode(paste(as.character(i)," NEW YORK"))
+  while(is.na(TAXI_GEO_COORDINATES[x,]$lon)) {
+    TAXI_GEO_COORDINATES[x,] <- geocode(paste(as.character(i)," NEW YORK"))
+  }
+  x <- x + 1
+}
+
+#remove Index 264 and 256
+TAXI_ZONES <- TAXI_ZONES[-c(264:265),]
+TAXI_GEO_COORDINATES <- TAXI_GEO_COORDINATES[-c(264:265),]
+
+#removing index from main data as well
+TAXI_DATA <- TAXI_DATA[TAXI_DATA$PULocationID != 264,]
+TAXI_DATA <- TAXI_DATA[TAXI_DATA$PULocationID != 265,]
+TAXI_DATA <- TAXI_DATA[TAXI_DATA$DOLocationID != 264,]
+TAXI_DATA <- TAXI_DATA[TAXI_DATA$DOLocationID != 265,]
+##debugging TAXI_DATA  %>% filter(DOLocationID == 1) %>% head()
+
+
+TAXI_ZONES <- data.frame(TAXI_ZONES, TAXI_GEO_COORDINATES)
+
+
+#merge location with data
+TAXI_DATA <- merge(TAXI_DATA, TAXI_ZONES[,c("LocationID", "lon", "lat")], by.x="PULocationID", by.y="LocationID", all.x= TRUE)
+names(TAXI_DATA)[names(TAXI_DATA) == "lon"] <- "PUlon"
+names(TAXI_DATA)[names(TAXI_DATA) == "lat"] <- "PUlat"
+
+TAXI_DATA <- merge(TAXI_DATA, TAXI_ZONES[,c("LocationID", "lon", "lat")], by.x="DOLocationID", by.y="LocationID", all.x= TRUE)
+names(TAXI_DATA)[names(TAXI_DATA) == "lon"] <- "DOlon"
+names(TAXI_DATA)[names(TAXI_DATA) == "lat"] <- "DOlat"
+
+TAXI_DATA <- TAXI_DATA[, c(1:6,18:21)]
+
+TAXI_DATA$tpep_pickup_datetime <- strptime(TAXI_DATA$tpep_pickup_datetime ,"%Y-%m-%d %H:%M:%S")
+TAXI_DATA$tpep_pickup_datetime <- as.numeric(TAXI_DATA$tpep_pickup_datetime)
+
+TAXI_DATA$tpep_dropoff_datetime <- strptime(TAXI_DATA$tpep_dropoff_datetime ,"%Y-%m-%d %H:%M:%S")
+TAXI_DATA$tpep_dropoff_datetime <- as.numeric(TAXI_DATA$tpep_dropoff_datetime)
+
+TAXI_DATA <- TAXI_DATA %>%
+  filter(DOLocationID != PULocationID)
+
+
+
+#display raw data head
+head(TAXI_DATA)
+
+
+vi = c(1:30) # days in november
+DAY_TAXI_DATA <- head(data.frame(VendorID=numeric(),
+                 tpep_pickup_datetime=numeric(),
+                 tpep_dropoff_datetime=numeric(),
+                 passenger_count=numeric(),
+                 PUlon=numeric(),
+                 PUlat=numeric(),
+                 DOlon=numeric(),
+                 DOlat=numeric(),
+                 stringsAsFactors=FALSE))
+daystart = 1477958400
+for(i in vi){
+  dayend = daystart + 86400
+  temp <- TAXI_DATA %>% select(VendorID,tpep_pickup_datetime,tpep_dropoff_datetime,passenger_count,PUlon,PUlat,DOlon,DOlat)  %>%
+  filter(tpep_pickup_datetime >= daystart & tpep_pickup_datetime < dayend)
+  temp$Day <- i
+  temp$PUlon <- as.numeric(temp$PUlon)
+  temp$PUlat <- as.numeric(temp$PUlat)
+  temp$DOlon <- as.numeric(temp$DOlon)
+  temp$DOlat <- as.numeric(temp$DOlat)
+  DAY_TAXI_DATA <- bind_rows(DAY_TAXI_DATA, temp)
+  daystart = dayend
+}
+rm(temp,TAXI_DATA,TAXI_GEO_COORDINATES,TAXI_NAMES,TAXI_ZONES,daystart,dayend,i,vi,x)
+
+save(DAY_TAXI_DATA,file="CAB_DATA_NOVEMBER_2016.Rda")
+
+load("CAB_DATA_NOVEMBER_2016.Rda")
+
+#calculated for every input
+temp <- DAY_TAXI_DATA %>% filter(Day == 1 & tpep_pickup_datetime >= 1478001600 & tpep_pickup_datetime < 1478005200 & PUlon == DOlon & PUlat == DOlat)
+temp$ID <-  as.numeric(row.names(temp))
+temp1 <- temp[, c(1:4,7:10)]
+names(temp1)[names(temp1) == "DOlon"] <- "lon"
+names(temp1)[names(temp1) == "DOlat"] <- "lat"
+temp1$Destination <- "Drop Out"
+temp2 <- temp[, c(1:6,9:10)]
+names(temp2)[names(temp2) == "PUlon"] <- "lon"
+names(temp2)[names(temp2) == "PUlat"] <- "lat"
+temp2$Destination <- "Pick Up"
+temp <- bind_rows(temp1, temp2)
+rm(temp1,temp2)
+
+
+
+geojson <- readLines("community_districts.geojson", warn = FALSE) %>%
+  paste(collapse = "\n") %>%
+  fromJSON(simplifyVector = FALSE)
+
+geojson$style = list(
+  weight = 1,
+  color = "#691A99",
+  opacity = 1,
+  fillOpacity = 0.2
+)
+
+map <- leaflet(data=temp) %>% setView(lng = max(temp$lon), lat = max(temp$lat), zoom = 6) %>%
+  addTiles() %>%
+  addGeoJSON(geojson) 
+
+temp$id <-  as.numeric(row.names(temp))
+for(i in unique(temp$id)){
+  map <- addPolylines(map, data = temp[temp$id == i,], 
+                      lat = temp$lat, lng = temp$lon, group = temp$fare_id, color = temp$VendorID)
+}
+map
+```
+
+```{r}
+#load libraries pacman and google maps
+library(pacman)
+library(ggmap)
+library(data.table)
+#library(leaflet)
+p_load(tidyverse, stringr, rvest)
+
+#load data
+FHV_DATA <- read.table("fhv_tripdata_2016-11.csv", skip = 1, stringsAsFactors = FALSE, sep = ",")
+FHV_NAMES <- read.table("fhv_tripdata_2016-11.csv", nrow = 1, stringsAsFactors = FALSE, sep = ",")
+names(FHV_DATA) <- FHV_NAMES
+
+TAXI_ZONES <- fread("taxi+_zone_lookup.csv")
+
+FHV_LICENCE_DATA <- read.csv("fhv_bases.csv")
+FHV_LICENCE_DATA <- FHV_LICENCE_DATA[,-3]
+
+rm(FHV_NAMES)
+
+
+
+#clean Zone in TAXI_ZONES
+TAXI_ZONES$Zone <- gsub("\\<\\w+[/]","", TAXI_ZONES$Zone)
+
+
+#create geo coordinates from google maps latitude and longlitude 
+x <- 1
+TAXI_GEO_COORDINATES <- data.frame(lon=character(), 
+                 lat=character(),
+                 stringsAsFactors=FALSE) 
+for(i in TAXI_ZONES$Zone) {
+  TAXI_GEO_COORDINATES[x,] <- geocode(paste(as.character(i)," NEW YORK"))
+  while(is.na(TAXI_GEO_COORDINATES[x,]$lon)) {
+    TAXI_GEO_COORDINATES[x,] <- geocode(paste(as.character(i)," NEW YORK"))
+  }
+  x <- x + 1
+}
+
+#remove Index 264 and 256
+TAXI_ZONES <- TAXI_ZONES[-c(264:265),]
+TAXI_GEO_COORDINATES <- TAXI_GEO_COORDINATES[-c(264:265),]
+TAXI_ZONES <- data.frame(TAXI_ZONES, TAXI_GEO_COORDINATES)
+
+save(TAXI_ZONES,file="TAXI_GEO_ZONES_NOVEMBER_2016.Rda")
+
+load("TAXI_GEO_ZONES_NOVEMBER_2016.Rda")
+#removing index from main data as well
+FHV_DATA <- FHV_DATA[FHV_DATA$locationID != 264,]
+FHV_DATA <- FHV_DATA[FHV_DATA$locationID != 265,]
+
+#cleaning data
+FHV_DATA <- FHV_DATA[!is.na(FHV_DATA$locationID),]
+
+#convert dates into unix format 
+FHV_DATA$Pickup_date <- strptime(FHV_DATA$Pickup_date ,"%Y-%m-%d %H:%M:%S")
+FHV_DATA$Pickup_date <- as.numeric(FHV_DATA$Pickup_date)
+
+FHV_DATA <- merge(FHV_DATA, TAXI_ZONES[,c("LocationID", "lon", "lat")], by.x="locationID", by.y="LocationID", all.x= TRUE)
+
+FHV_DATA <- merge(FHV_DATA, FHV_LICENCE_DATA, by.x="Dispatching_base_num", by.y="base_number", all.x= TRUE)
+
+FHV_DATA <- FHV_DATA[order(FHV_DATA$Pickup_date), ]
+FHV_DATA <- FHV_DATA[, -1]
+FHV_DATA$lon <- as.numeric(FHV_DATA$lon)
+FHV_DATA$lat <- as.numeric(FHV_DATA$lat)
+
+save(FHV_DATA,file="FHV_DATA_NOVEMBER_2016.Rda")
+
+
+
+
+```
